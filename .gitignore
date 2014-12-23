@@ -61,3 +61,4 @@ config.ini
 *.pyc
 .idea
 test
+config.ini
