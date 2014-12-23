@@ -12,15 +12,14 @@ import ConfigParser
 import random
 import smtplib
 from email.mime.text import MIMEText
-
+import json
 # 第三方库
 import requests
-from huzhifeng import dumpObj, hasKeys
+import PyV8
 
 # Set default encoding to utf-8
 reload(sys)
 sys.setdefaultencoding('utf-8')
-requests.packages.urllib3.disable_warnings()
 
 # 全局变量
 RET_OK = 0
@@ -43,6 +42,23 @@ seatMaps = [
 
 
 # 全局函数
+
+def dumpObj(obj):
+    if not obj:
+        return
+    print(json.dumps(obj, ensure_ascii=False, indent=2))
+
+
+def hasKeys(obj, keys):
+    if not obj:
+        return False
+    if not keys:
+        return False
+    if set(keys).issubset(obj):
+        return True
+    return False
+
+
 def printDelimiter():
     print('-' * 64)
 
@@ -250,6 +266,24 @@ class MyOrder(object):
             'xb': [],
             'focus': {}
         }
+        self.encrypted_key_value = []  # 登录验证中的加密key value
+
+    def extract_encrypt_key_value(self, html_content):
+        login_match = re.search(r'<script src="(/otn/dynamicJs/.*?)" type="text/javascript" xml:space="preserve"></script>',
+                                html_content)
+        js_url = "https://kyfw.12306.cn" + login_match.group(1)
+        js_req = self.session.get(js_url)
+        js_content = js_req.content
+        js_match = re.search("(function bin216.*?)function aj", js_content)
+        js_encode = js_match.group(1)
+        key_match = re.search("var key='(.*?)'", js_content)
+        login_key = key_match.group(1)
+        ctx = PyV8.JSContext()
+        ctx.enter()
+        ctx.eval(js_encode)
+        login_value = ctx.locals.encode32(ctx.locals.bin216(ctx.locals.Base32.encrypt("1111", login_key)))
+        print(login_key, login_value)
+        return [login_key, login_value]
 
     def initSession(self):
         self.session = requests.Session()
@@ -718,7 +752,7 @@ class MyOrder(object):
 
         if self.checkRandCodeAnsyn('login') == RET_ERR:
             return RET_ERR
-
+        self.encrypted_key_value = self.extract_encrypt_key_value(r.content)
         print(u'正在登录...')
         url = 'https://kyfw.12306.cn/otn/login/loginAysnSuggest'
         parameters = [
@@ -726,7 +760,7 @@ class MyOrder(object):
             ('userDTO.password', self.password),
             ('randCode', self.captcha),
             ('randCode_validate', ''),
-            #('ODg3NzQ0', 'OTIyNmFhNmQwNmI5ZmQ2OA%3D%3D'),
+            (self.encrypted_key_value[0], self.encrypted_key_value[1]),
             ('myversion', 'undefined')
         ]
         payload = urllib.urlencode(parameters)
@@ -1153,9 +1187,12 @@ class MyOrder(object):
             print(u'初始化订单异常')
 
         print(u'准备下单喽')
+        url = 'https://kyfw.12306.cn/otn/leftTicket/init'
+        r = self.get(url)
+        self.encrypted_key_value = self.extract_encrypt_key_value(r.content)
         url = 'https://kyfw.12306.cn/otn/leftTicket/submitOrderRequest'
         parameters = [
-            #('ODA4NzIx', 'MTU0MTczYmQ2N2I3MjJkOA%3D%3D'),
+            (self.encrypted_key_value[0], self.encrypted_key_value[1]),
             ('myversion', 'undefined'),
             ('secretStr', self.trains[self.current_train_index]['secretStr']),
             ('train_date', self.train_date),
